@@ -1,0 +1,8 @@
+defaults:
+  - dataset@_here_: so101
+  - policy_io@_here_: so101
+  - _self_
+
+dataset:
+  dataset:
+    data_dir: ???

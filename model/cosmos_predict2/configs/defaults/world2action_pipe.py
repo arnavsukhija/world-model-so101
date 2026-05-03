@@ -37,6 +37,23 @@ ACTION_DECODER_NETS = {
         pair_timestep_feature_rank=1024,
         sac_config=SACConfig(mode="none", every_n_blocks=1),
     ),
+    # SO-101 pushing: 5 arm joints (shoulder_pan/lift, elbow_flex, wrist_flex/roll; gripper fixed)
+    # max_horizon=16 matches bridge (15 action steps + 1 for indexing), 5Hz target frequency
+    "so101": L(VarNoiseWorld2ActionDIT)(
+        max_horizon=16,
+        in_channels=5,
+        out_channels=5,
+        model_channels=512,
+        num_blocks=12,
+        num_heads=8,
+        mlp_ratio=4.0,
+        atten_backend="flash_attn_no_cp",
+        crossattn_emb_channels=2048,
+        use_adaln_lora=True,
+        adaln_lora_dim=64,
+        pair_timestep_feature_rank=512,
+        sac_config=SACConfig(mode="none", every_n_blocks=1),
+    ),
 }
 
 
