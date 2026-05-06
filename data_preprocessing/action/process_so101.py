@@ -1,18 +1,22 @@
-"""Convert a LeRobot HuggingFace dataset of SO-101 teleoperation to mimic-video zarr format.
+"""Convert a LeRobot v3 HuggingFace dataset of SO-101 teleoperation to mimic-video zarr format.
 
-LeRobot dataset layout (after `lerobot record`):
+LeRobot v3 dataset layout (after `lerobot record`):
   <dataset_root>/
-    meta/info.json                                   # keys, fps, shapes
-    data/chunk-000/episode_000000.parquet            # one parquet per episode
-    videos/<camera_key>/chunk-000/episode_000000.mp4
+    meta/info.json
+    meta/episodes/chunk-000/file-000.parquet   # per-episode index → frame range
+    data/chunk-000/file-000.parquet            # all frames, grouped by episode_index
+    videos/<camera_key>/chunk-000/file-000.mp4 # ALL episodes concatenated in one mp4
 
-Parquet columns of interest:
+Parquet columns of interest (data/):
   observation.state  [n_joints]  joint positions in degrees
   action             [n_joints]  commanded joint positions in degrees
   timestamp          float       seconds since episode start
   frame_index        int
   episode_index      int
-  next.done          bool
+
+Episodes meta columns of interest:
+  episode_index, length, dataset_from_index, dataset_to_index
+  videos/<camera_key>/chunk_index, videos/<camera_key>/file_index
 
 Output zarr layout (one .zarr directory per episode):
   workspace_rgb              [N, H, W, 3]  uint8
@@ -25,17 +29,15 @@ Run precompute_t5.py afterwards to add language_embedding.
 
 Usage:
   python process_so101.py \\
-      --dataset-root ~/.cache/huggingface/lerobot/my_push_dataset \\
-      --output-dir /data/so101_push \\
-      --camera-key observation.images.cam_wrist \\
-      --prompt "push the cube from left to right" \\
-      [--joints shoulder_pan shoulder_lift elbow_flex wrist_flex wrist_roll]
+      --dataset-root ~/workspace/RobotLearning/record-test_20260506_184055 \\
+      --output-dir /data/so101_push_zarr \\
+      --camera-key observation.images.front \\
+      --prompt "push the cube from left to right"
 """
 
 import argparse
 import json
 import pathlib
-import subprocess
 
 import cv2
 import numpy as np
@@ -46,8 +48,8 @@ from numcodecs import Blosc
 
 S_TO_NS = 1_000_000_000
 
-# SO-101 joint order as recorded by LeRobot (degrees, excluding gripper for pushing tasks)
 DEFAULT_JOINTS = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"]
+DEFAULT_CAMERA_KEY = "observation.images.front"
 
 
 def load_info(dataset_root: pathlib.Path) -> dict:
@@ -55,31 +57,55 @@ def load_info(dataset_root: pathlib.Path) -> dict:
         return json.load(f)
 
 
+def load_episodes_meta(dataset_root: pathlib.Path, camera_key: str) -> dict[int, dict]:
+    """Return {episode_index: {from_frame, length, chunk_index, file_index}} from meta/episodes/."""
+    ep_files = sorted((dataset_root / "meta" / "episodes").glob("**/*.parquet"))
+    frames = [pd.read_parquet(f) for f in ep_files]
+    meta = pd.concat(frames, ignore_index=True)
+
+    vid_chunk_col = f"videos/{camera_key}/chunk_index"
+    vid_file_col = f"videos/{camera_key}/file_index"
+
+    result = {}
+    for _, row in meta.iterrows():
+        ep_idx = int(row["episode_index"])
+        result[ep_idx] = {
+            "from_frame": int(row["dataset_from_index"]),
+            "length": int(row["length"]),
+            "chunk_index": int(row[vid_chunk_col]),
+            "file_index": int(row[vid_file_col]),
+        }
+    return result
+
+
 def iter_episodes(dataset_root: pathlib.Path):
-    """Yield (episode_index, parquet_path) sorted by episode_index."""
+    """Yield (episode_index, dataframe) sorted by episode_index."""
     data_dir = dataset_root / "data"
     parquet_files = sorted(data_dir.glob("**/*.parquet"))
-    for p in parquet_files:
-        df = pd.read_parquet(p)
-        for ep_idx, group in df.groupby("episode_index"):
-            yield ep_idx, group.reset_index(drop=True)
+    all_dfs = [pd.read_parquet(p) for p in parquet_files]
+    combined = pd.concat(all_dfs, ignore_index=True)
+    for ep_idx, group in combined.groupby("episode_index"):
+        yield ep_idx, group.reset_index(drop=True)
 
 
-def extract_video_frames(
+def extract_episode_frames(
     video_path: pathlib.Path,
+    from_frame: int,
+    n_frames: int,
     *,
     target_height: int = 480,
     target_width: int = 640,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Return (frames [N, H, W, 3] uint8, timestamps [N] float64 seconds)."""
+    """Seek to from_frame in the combined mp4 and read n_frames. Returns (frames [N,H,W,3], timestamps [N])."""
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video: {video_path}")
 
-    frames, timestamps = [], []
     fps = cap.get(cv2.CAP_PROP_FPS)
-    frame_idx = 0
-    while True:
+    cap.set(cv2.CAP_PROP_POS_FRAMES, from_frame)
+
+    frames, timestamps = [], []
+    for i in range(n_frames):
         ret, frame = cap.read()
         if not ret:
             break
@@ -87,46 +113,32 @@ def extract_video_frames(
         if frame.shape[:2] != (target_height, target_width):
             frame = cv2.resize(frame, (target_width, target_height))
         frames.append(frame)
-        timestamps.append(frame_idx / fps)
-        frame_idx += 1
+        timestamps.append(i / fps)  # relative to episode start
     cap.release()
+
+    if not frames:
+        raise RuntimeError(f"No frames read from {video_path} at position {from_frame}")
 
     return np.stack(frames, axis=0), np.array(timestamps, dtype=np.float64)
 
 
-def find_video_for_episode(
-    dataset_root: pathlib.Path,
-    camera_key: str,
-    episode_index: int,
-) -> pathlib.Path | None:
-    """Locate the mp4 for a given episode across all chunks."""
-    video_root = dataset_root / "videos" / camera_key
-    pattern = f"episode_{episode_index:06d}.mp4"
-    matches = list(video_root.glob(f"**/{pattern}"))
-    return matches[0] if matches else None
-
-
 def parse_state_column(df: pd.DataFrame, joints: list[str]) -> np.ndarray:
-    """Extract joint positions. LeRobot stores observation.state as a list column."""
+    """Extract first len(joints) columns from observation.state.
+    LeRobot SO-101 order: shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll, gripper."""
     raw = df["observation.state"].tolist()
     arr = np.array(raw, dtype=np.float32)  # [N, n_joints_total]
-
-    # Try to match joints by name via info.json motor order; fall back to positional slice.
-    # LeRobot SO-101 default order: shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll, gripper
-    n_wanted = len(joints)
-    return arr[:, :n_wanted]
+    return arr[:, : len(joints)]
 
 
 def write_episode_zarr(
     output_path: pathlib.Path,
     *,
-    frames: np.ndarray,        # [N, H, W, 3] uint8
-    video_timestamps: np.ndarray,  # [N] float64 seconds
-    joint_positions: np.ndarray,   # [N, J] float32
-    joint_timestamps: np.ndarray,  # [N] float64 seconds
+    frames: np.ndarray,
+    video_timestamps: np.ndarray,
+    joint_positions: np.ndarray,
+    joint_timestamps: np.ndarray,
     language_instruction: str,
 ) -> None:
-    """Write one episode to zarr format expected by mimic-video."""
     compressor = Blosc(cname="lz4", clevel=1, shuffle=Blosc.BITSHUFFLE)
 
     with zarr.open(str(output_path), mode="w") as root:
@@ -185,25 +197,50 @@ def process_dataset(
     skip_existing: bool = True,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
+    episodes_meta = load_episodes_meta(dataset_root, camera_key)
 
     episodes = list(iter_episodes(dataset_root))
     print(f"Found {len(episodes)} episodes in {dataset_root}")
+
+    # Cache video paths per (chunk, file) — avoids re-resolving the same path every episode
+    video_path_cache: dict[tuple[int, int], pathlib.Path] = {}
 
     for ep_idx, df in tqdm.tqdm(episodes, desc="Processing episodes"):
         out_path = output_dir / f"episode_{ep_idx:06d}.zarr"
         if skip_existing and out_path.exists():
             continue
 
-        video_path = find_video_for_episode(dataset_root, camera_key, ep_idx)
-        if video_path is None:
-            print(f"  [warn] No video found for episode {ep_idx}, skipping.")
+        if ep_idx not in episodes_meta:
+            print(f"  [warn] No episode meta for episode {ep_idx}, skipping.")
             continue
 
-        frames, video_ts = extract_video_frames(video_path)
+        meta = episodes_meta[ep_idx]
+        chunk_idx = meta["chunk_index"]
+        file_idx = meta["file_index"]
+        from_frame = meta["from_frame"]
+
+        cache_key = (chunk_idx, file_idx)
+        if cache_key not in video_path_cache:
+            vid_path = (
+                dataset_root
+                / "videos"
+                / camera_key
+                / f"chunk-{chunk_idx:03d}"
+                / f"file-{file_idx:03d}.mp4"
+            )
+            if not vid_path.exists():
+                print(f"  [warn] Video not found: {vid_path}, skipping episode {ep_idx}.")
+                continue
+            video_path_cache[cache_key] = vid_path
+
+        video_path = video_path_cache[cache_key]
         joint_positions = parse_state_column(df, joints)
         joint_timestamps = df["timestamp"].to_numpy(dtype=np.float64)
+        n_frames = len(joint_positions)
 
-        # Align lengths: video and joints may differ by ±1 frame at boundaries
+        frames, video_ts = extract_episode_frames(video_path, from_frame, n_frames)
+
+        # Align if video returned fewer frames than expected (edge case near end of file)
         min_n = min(len(frames), len(joint_positions))
         frames = frames[:min_n]
         video_ts = video_ts[:min_n]
@@ -219,24 +256,18 @@ def process_dataset(
             language_instruction=prompt,
         )
 
-    print(f"Done. Written to {output_dir}")
+    print(f"\nDone. Written to {output_dir}")
     print("Next: run precompute_t5.py to add language_embedding to each zarr.")
 
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--dataset-root", type=pathlib.Path, required=True,
-                   help="Root of the LeRobot HuggingFace dataset directory")
-    p.add_argument("--output-dir", type=pathlib.Path, required=True,
-                   help="Directory to write per-episode .zarr files")
-    p.add_argument("--camera-key", default="observation.images.cam_wrist",
-                   help="Camera key used during recording (matches videos/ subdirectory)")
-    p.add_argument("--prompt", default="push the cube from left to right",
-                   help="Language instruction stored in every episode")
-    p.add_argument("--joints", nargs="+", default=DEFAULT_JOINTS,
-                   help="Joint names to extract in order (must match LeRobot motor order)")
-    p.add_argument("--no-skip-existing", action="store_true",
-                   help="Reprocess episodes even if output zarr already exists")
+    p.add_argument("--dataset-root", type=pathlib.Path, required=True)
+    p.add_argument("--output-dir", type=pathlib.Path, required=True)
+    p.add_argument("--camera-key", default=DEFAULT_CAMERA_KEY)
+    p.add_argument("--prompt", default="push the cube from left to right")
+    p.add_argument("--joints", nargs="+", default=DEFAULT_JOINTS)
+    p.add_argument("--no-skip-existing", action="store_true")
     args = p.parse_args()
 
     process_dataset(

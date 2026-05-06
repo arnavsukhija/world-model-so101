@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "so101-data-pipeline"
+version = "0.1.0"
+description = "Data preprocessing tools for SO-101 world model (no GPU required)"
+requires-python = "==3.10.*"
+dependencies = [
+  "numpy==1.26.4",
+  "pandas==2.2.3",
+  "pyarrow>=15.0.0",       # parquet support
+  "zarr>=2.16,<2.18",
+  "numcodecs>=0.12,<0.14",
+  "opencv-python-headless==4.11.0.86",
+  "tqdm==4.66.5",
+  "imageio==2.37.0",
+]
+
+[tool.uv]
+environments = [
+  "python_version == '3.10'",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["data_preprocessing"]
