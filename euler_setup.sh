@@ -34,42 +34,31 @@ echo "MODEL_DIR: $MODEL_DIR"
 echo "DATA_DIR : ${DATA_DIR:-'(not provided — T5 precompute will be skipped)'}"
 echo ""
 
-# ── 1. Modules ─────────────────────────────────────────────────────────────
-# Verify available versions with: module avail gcc python cuda
-# CUDA MUST be 12.6 — the prebuilt wheels are cu126-specific.
-echo "[1/4] Loading modules..."
-module purge
-module load gcc/12.2.0
-module load cuda/12.6.0
-module load python/3.10.14
-
-python --version
-nvcc --version | head -1
-echo ""
-
-# ── 2. Install uv ──────────────────────────────────────────────────────────
-echo "[2/4] Installing uv (user-local, no sudo needed)..."
+# ── 1. Install uv ──────────────────────────────────────────────────────────
+echo "[1/4] Installing uv (user-local, no sudo needed)..."
 if ! command -v uv &>/dev/null; then
     curl -LsSf https://astral.sh/uv/install.sh | sh
 fi
 export PATH="$HOME/.local/bin:$PATH"
+export UV_CACHE_DIR="/cluster/scratch/$USER/.cache/uv"
+export UV_PYTHON_INSTALL_DIR="/cluster/scratch/$USER/.cache/uv-python"
 echo "uv: $(uv --version)"
 echo ""
 
 # ── 3. Python environment ──────────────────────────────────────────────────
-echo "[3/4] Installing Python dependencies..."
-echo "      (apex, flash-attn, natten, transformer-engine come as prebuilt cu126 wheels"
-echo "       from the NVIDIA cosmos index — no compilation needed)"
+echo "[2/4] Installing Python dependencies..."
+echo "      uv manages Python 3.10 itself; cu126 wheels bundle their own CUDA runtime."
+echo "      (apex, flash-attn, natten, transformer-engine are prebuilt — no compilation)"
 cd "$MODEL_DIR"
-uv sync --extra cu126
+uv sync --extra cu126 --python 3.10
 echo ""
 echo "Verifying critical packages..."
 uv run python scripts/test_environment.py --training
 echo ""
 
-# ── 4a. Download checkpoints ───────────────────────────────────────────────
+# ── 3a. Download checkpoints ───────────────────────────────────────────────
 if [[ $SKIP_CKPTS -eq 0 ]]; then
-    echo "[4/4a] Downloading checkpoints from jonpai/mimic-video..."
+    echo "[3/4a] Downloading checkpoints from jonpai/mimic-video..."
     echo "       Downloads: text_encoder (~5 GB), video_backbone/tokenizer (~1 GB),"
     echo "       video_backbone/v2w_pretrained_cosmos.pt (~7 GB)"
     echo "       Total: ~13 GB. Target: $MODEL_DIR/checkpoints/"
@@ -84,21 +73,21 @@ if [[ $SKIP_CKPTS -eq 0 ]]; then
         --models pretrained_cosmos_bridge \
         --checkpoint-dir checkpoints
 else
-    echo "[4/4a] Skipping checkpoint download (--skip-checkpoints)."
+    echo "[3/4a] Skipping checkpoint download (--skip-checkpoints)."
 fi
 
-# ── 4b. Precompute T5 language embeddings ─────────────────────────────────
+# ── 3b. Precompute T5 language embeddings ─────────────────────────────────
 # The T5-XXL encoder (~40 GB on disk) is loaded into CPU memory (~20 GB).
-# All 15 SO-101 episodes share the same prompt, so this runs quickly.
+# All 10 SO-101 episodes share the same prompt, so this runs quickly.
 # Result: adds language_embedding [1, 512, 1024] float16 to every zarr episode.
 if [[ $SKIP_T5 -eq 0 ]]; then
     if [[ -z "$DATA_DIR" ]]; then
-        echo "[4/4b] WARNING: --data-dir not provided, skipping T5 precompute."
+        echo "[3/4b] WARNING: --data-dir not provided, skipping T5 precompute."
         echo "       Run manually: cd model && uv run python ../data_preprocessing/action/precompute_t5.py \\"
         echo "         --dataset-path /path/to/so101_push_zarr \\"
         echo "         --prompt 'push the cube from left to right'"
     else
-        echo "[4/4b] Precomputing T5-XXL language embeddings for all zarr episodes..."
+        echo "[3/4b] Precomputing T5-XXL language embeddings for all zarr episodes..."
         echo "       Dataset: $DATA_DIR"
         echo "       Prompt:  'push the cube from left to right'"
         uv run python ../data_preprocessing/action/precompute_t5.py \
@@ -107,7 +96,7 @@ if [[ $SKIP_T5 -eq 0 ]]; then
         echo "       Done. Each zarr now contains language_embedding."
     fi
 else
-    echo "[4/4b] Skipping T5 precompute (--skip-t5)."
+    echo "[3/4b] Skipping T5 precompute (--skip-t5)."
 fi
 
 echo ""

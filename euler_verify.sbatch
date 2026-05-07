@@ -19,11 +19,9 @@ REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 MODEL_DIR="$REPO_DIR/model"
 mkdir -p "$REPO_DIR/logs"
 
-module purge
-module load gcc/12.2.0
-module load cuda/12.6.0
-module load python/3.10.14
 export PATH="$HOME/.local/bin:$PATH"
+export UV_CACHE_DIR="/cluster/scratch/$USER/.cache/uv"
+export UV_PYTHON_INSTALL_DIR="/cluster/scratch/$USER/.cache/uv-python"
 export TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=7200
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 export NVTE_FUSED_ATTN=0
