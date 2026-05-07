@@ -9,7 +9,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:a100:1
 #SBATCH --partition=gpu
 
 DATA_DIR="${DATA_DIR:-/cluster/scratch/$USER/so101_push_zarr}"
@@ -33,7 +33,10 @@ cd "$MODEL_DIR"
 echo "=== Smoke test: config dryrun ==="
 uv run torchrun --nproc_per_node=1 --master_port=12341 \
     -m scripts.train --config=cosmos_predict2/configs/config.py --dryrun \
-    -- experiment="$EXPERIMENT" +data_config.dataset.dataset.data_dir="$DATA_DIR"
+    -- experiment="$EXPERIMENT" \
+    +data_config.dataset.dataset.data_dir="$DATA_DIR" \
+    +data_config.dataset.dataset.num_val_episodes=0 \
+    trainer.run_validation=false
 
 echo ""
 echo "=== Smoke test: 100 training iterations ==="
@@ -41,8 +44,9 @@ uv run torchrun --nproc_per_node=1 --master_port=12342 \
     -m scripts.train --config=cosmos_predict2/configs/config.py \
     -- experiment="$EXPERIMENT" \
     +data_config.dataset.dataset.data_dir="$DATA_DIR" \
+    +data_config.dataset.dataset.num_val_episodes=0 \
     trainer.max_iter=100 trainer.logging_iter=10 \
-    trainer.validation_iter=100 checkpoint.save_iter=100
+    trainer.run_validation=false checkpoint.save_iter=100
 
 echo ""
 echo "Check logs/verify_${SLURM_JOB_ID}.out — loss should be finite and roughly decreasing."

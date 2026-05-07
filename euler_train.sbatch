@@ -7,9 +7,8 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=12
 #SBATCH --mem=64G
-#SBATCH --gres=gpu:1
-# Uncomment to request a specific GPU type (A100 has 40 GB VRAM, recommended):
-# #SBATCH --gres=gpu:a100:1
+# A100 required: 2B Cosmos backbone at bf16 needs ~15 GB VRAM; V100 16 GB is too small.
+#SBATCH --gres=gpu:a100:1
 #SBATCH --partition=gpu
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -26,7 +25,6 @@ EXPERIMENT="w2a_so101_push_v2w_pretrained_cosmos_lr1.000e-04_layer20_bsz1"
 MAX_ITER=5000
 LOG_ITER=50
 SAVE_ITER=500
-VAL_ITER=500
 GRAD_ACCUM=4      # effective batch size = 4
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -66,7 +64,9 @@ uv run torchrun \
     --dryrun \
     -- \
     experiment="$EXPERIMENT" \
-    +data_config.dataset.dataset.data_dir="$DATA_DIR"
+    +data_config.dataset.dataset.data_dir="$DATA_DIR" \
+    +data_config.dataset.dataset.num_val_episodes=0 \
+    trainer.run_validation=false
 
 echo "Config OK. Starting training..."
 echo ""
@@ -84,9 +84,10 @@ uv run torchrun \
     -- \
     experiment="$EXPERIMENT" \
     +data_config.dataset.dataset.data_dir="$DATA_DIR" \
+    +data_config.dataset.dataset.num_val_episodes=0 \
     trainer.max_iter=$MAX_ITER \
     trainer.logging_iter=$LOG_ITER \
-    trainer.validation_iter=$VAL_ITER \
+    trainer.run_validation=false \
     trainer.grad_accum_iter=$GRAD_ACCUM \
     checkpoint.save_iter=$SAVE_ITER
 
