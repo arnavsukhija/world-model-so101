@@ -68,14 +68,14 @@ uv run torchrun \
     experiment="$EXPERIMENT" \
     +data_config.dataset.dataset.data_dir="$DATA_DIR"
 
-CONFIG_YAML=$(ls -t ../logs/train_${SLURM_JOB_ID}* 2>/dev/null | head -1 || echo "")
 echo "Config OK. Starting training..."
 echo ""
 
 # ── Training ──────────────────────────────────────────────────────────────────
-# The frozen Cosmos video backbone (2B DiT, bfloat16) extracts video features.
-# Only the LoRA adapters on the backbone + the SO-101 action decoder are trained.
-# Action decoder: 12-block, 512-ch DiT, 5-joint I/O, ~30M params.
+# Frozen: 2B Cosmos video backbone. Trainable: SO-101 action decoder (12-block,
+# 512-ch DiT, 5-joint I/O, ~30M params). train_architecture=base is correct here
+# because the action decoder is initialised from random weights — LoRA only helps
+# when fine-tuning a pretrained model.
 uv run torchrun \
     --nproc_per_node=1 \
     --master_port=12342 \
@@ -93,7 +93,27 @@ uv run torchrun \
 echo ""
 echo "=== Training complete ==="
 echo ""
-echo "Checkpoints are in: $MODEL_DIR/training_runs/<experiment_name>/"
+
+# ── Extract slim inference artifacts ──────────────────────────────────────────
+# Training checkpoints are ~7 GB (frozen backbone + optimizer state included).
+# This extracts only the action decoder DiT weights (~60 MB) and dataset stats,
+# so you can scp a small package for local inference.
+CKPT_DIR="checkpoints/vam/so101/$EXPERIMENT/checkpoints"
+LATEST_CKPT=$(ls -t "$CKPT_DIR"/iter_*.pt 2>/dev/null | head -1)
+
+if [[ -n "$LATEST_CKPT" ]]; then
+    echo "--- Extracting inference artifacts from $LATEST_CKPT ---"
+    uv run python scripts/extract_checkpoint.py \
+        "$LATEST_CKPT" \
+        --stats-dir "$DATA_DIR" \
+        --output-dir checkpoints/so101_inference
+    echo ""
+    echo "Download inference files with:"
+    echo "  scp -r $SLURMD_NODENAME:$(pwd)/checkpoints/so101_inference/ ."
+else
+    echo "WARNING: No checkpoint found in $CKPT_DIR — extraction skipped."
+fi
+
 echo ""
 echo "To run longer, resubmit with MAX_ITER=20000 and --time=12:00:00."
 echo "Training resumes automatically from the latest checkpoint."
