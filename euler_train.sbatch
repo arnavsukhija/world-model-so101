@@ -8,29 +8,20 @@
 #SBATCH --cpus-per-task=12
 #SBATCH --mem-per-cpu=6G
 # A100 required: 2B Cosmos backbone at bf16 needs ~15 GB VRAM; V100 16 GB is too small.
-#SBATCH --gres=gpu:a100-pcie-40gb:1
-#SBATCH --partition=gpu
+#SBATCH --gpus=a100-pcie-40gb:1
 
 # ── Config ────────────────────────────────────────────────────────────────────
-# zarr dataset directory — must already contain language_embedding in every zarr
-# (run euler_setup.sh --data-dir <PATH> first).
 DATA_DIR="${DATA_DIR:-/cluster/scratch/$USER/so101_push_zarr}"
-
-# SO-101 experiment: pretrained Cosmos backbone, lr=1e-4, layer-20 x-attn, bsz=1 globally.
-# Gradient accumulation of 4 simulates effective batch size 4 — better signal for tiny dataset.
 EXPERIMENT="w2a_so101_push_v2w_pretrained_cosmos_lr1.000e-04_layer20_bsz1"
 
-# Training length. 5000 iterations at ~0.5–1 s/iter ≈ 1–1.5 h on an A100.
-# Increase to 20000 for a longer run (use --time=12:00:00).
 MAX_ITER=5000
 LOG_ITER=50
 SAVE_ITER=500
-GRAD_ACCUM=4      # effective batch size = 4
+GRAD_ACCUM=4
 
 REPO_DIR="${REPO_DIR:-$SLURM_SUBMIT_DIR}"
 MODEL_DIR="$REPO_DIR/model"
-LOG_DIR="$REPO_DIR/logs"
-mkdir -p "$LOG_DIR"
+mkdir -p "$REPO_DIR/logs"
 
 # ── Environment ───────────────────────────────────────────────────────────────
 echo "=== World2Action SO-101 Training ==="
@@ -40,27 +31,42 @@ echo "DATA_DIR : $DATA_DIR"
 echo "Iter     : $MAX_ITER (grad_accum=$GRAD_ACCUM → eff_bsz=$GRAD_ACCUM)"
 echo ""
 
-export PATH="$HOME/.local/bin:$PATH"
-export UV_CACHE_DIR="/cluster/scratch/$USER/.cache/uv"
-export UV_PYTHON_INSTALL_DIR="/cluster/scratch/$USER/.cache/uv-python"
+# Activate the pre-built venv (cu126 wheels bundle their own CUDA runtime)
+source "$MODEL_DIR/.venv/bin/activate"
 
-# Required by megatron / NCCL
+# transformer_engine calls `ldconfig -p | grep libnvrtc` to find the bundled lib,
+# but ldconfig only searches system paths. Inject a wrapper that also reports the
+# venv's libnvrtc so the check passes without any system CUDA module.
+SITE_PKGS="$MODEL_DIR/.venv/lib/python3.10/site-packages"
+NVRTC_LIB="$SITE_PKGS/nvidia/cuda_nvrtc/lib"
+export LD_LIBRARY_PATH="${NVRTC_LIB}:${SITE_PKGS}/nvidia/cuda_runtime/lib:${LD_LIBRARY_PATH:-}"
+
+REAL_LDCONFIG="$(command -v ldconfig 2>/dev/null || echo /usr/sbin/ldconfig)"
+JOB_TMP="/tmp/euler_$SLURM_JOB_ID"
+mkdir -p "$JOB_TMP"
+cat > "$JOB_TMP/ldconfig" << LDWRAP
+#!/bin/bash
+${REAL_LDCONFIG} "\$@" 2>/dev/null || true
+if [[ "\${1:-}" == "-p" ]]; then
+    for lib in ${NVRTC_LIB}/libnvrtc*.so*; do
+        [ -e "\$lib" ] && echo "  \$(basename "\$lib") (libc6,x86-64) => \$lib"
+    done
+fi
+LDWRAP
+chmod +x "$JOB_TMP/ldconfig"
+export PATH="$JOB_TMP:$PATH"
+
 export TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=7200
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 export NVTE_FUSED_ATTN=0
 
 cd "$MODEL_DIR"
 
-# ── Dryrun: verify config resolves before wasting GPU time ────────────────────
+# ── Dryrun ────────────────────────────────────────────────────────────────────
 echo "--- Config dryrun ---"
-uv run torchrun \
-    --nproc_per_node=1 \
-    --master_port=12341 \
-    -m scripts.train \
-    --config=cosmos_predict2/configs/config.py \
-    --dryrun \
-    -- \
-    experiment="$EXPERIMENT" \
+torchrun --nproc_per_node=1 --master_port=12341 \
+    -m scripts.train --config=cosmos_predict2/configs/config.py --dryrun \
+    -- experiment="$EXPERIMENT" \
     +data_config.dataset.dataset.data_dir="$DATA_DIR" \
     +data_config.dataset.dataset.num_val_episodes=0 \
     trainer.run_validation=false
@@ -69,17 +75,9 @@ echo "Config OK. Starting training..."
 echo ""
 
 # ── Training ──────────────────────────────────────────────────────────────────
-# Frozen: 2B Cosmos video backbone. Trainable: SO-101 action decoder (12-block,
-# 512-ch DiT, 5-joint I/O, ~30M params). train_architecture=base is correct here
-# because the action decoder is initialised from random weights — LoRA only helps
-# when fine-tuning a pretrained model.
-uv run torchrun \
-    --nproc_per_node=1 \
-    --master_port=12342 \
-    -m scripts.train \
-    --config=cosmos_predict2/configs/config.py \
-    -- \
-    experiment="$EXPERIMENT" \
+torchrun --nproc_per_node=1 --master_port=12342 \
+    -m scripts.train --config=cosmos_predict2/configs/config.py \
+    -- experiment="$EXPERIMENT" \
     +data_config.dataset.dataset.data_dir="$DATA_DIR" \
     +data_config.dataset.dataset.num_val_episodes=0 \
     trainer.max_iter=$MAX_ITER \
@@ -93,15 +91,12 @@ echo "=== Training complete ==="
 echo ""
 
 # ── Extract slim inference artifacts ──────────────────────────────────────────
-# Training checkpoints are ~7 GB (frozen backbone + optimizer state included).
-# This extracts only the action decoder DiT weights (~60 MB) and dataset stats,
-# so you can scp a small package for local inference.
 CKPT_DIR="checkpoints/vam/so101/$EXPERIMENT/checkpoints"
 LATEST_CKPT=$(ls -t "$CKPT_DIR"/iter_*.pt 2>/dev/null | head -1)
 
 if [[ -n "$LATEST_CKPT" ]]; then
     echo "--- Extracting inference artifacts from $LATEST_CKPT ---"
-    uv run python scripts/extract_checkpoint.py \
+    python scripts/extract_checkpoint.py \
         "$LATEST_CKPT" \
         --stats-dir "$DATA_DIR" \
         --output-dir checkpoints/so101_inference
