@@ -16,22 +16,20 @@
 
 DATA_DIR="${DATA_DIR:-/cluster/scratch/$USER/so101_push_zarr}"
 
-REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="${REPO_DIR:-$SLURM_SUBMIT_DIR}"
 MODEL_DIR="$REPO_DIR/model"
 mkdir -p "$REPO_DIR/logs"
-
-export PATH="$HOME/.local/bin:$PATH"
-export UV_CACHE_DIR="/cluster/scratch/$USER/.cache/uv"
-export UV_PYTHON_INSTALL_DIR="/cluster/scratch/$USER/.cache/uv-python"
 
 echo "=== T5-XXL Embedding Precompute ==="
 echo "Job    : $SLURM_JOB_ID on $SLURMD_NODENAME"
 echo "DATA_DIR: $DATA_DIR"
 echo ""
 
+source "$MODEL_DIR/.venv/bin/activate"
+
 cd "$MODEL_DIR"
 
-uv run python ../data_preprocessing/action/precompute_t5.py \
+python ../data_preprocessing/action/precompute_t5.py \
     --dataset-path "$DATA_DIR"
 
 echo ""
