@@ -1,8 +1,9 @@
 defaults:
-  - dataset@_here_: so101
-  - policy_io@_here_: so101
+  - dataset: so101
+  - policy_io: so101
   - _self_
 
 dataset:
   dataset:
-    data_dir: ???
+    data_dir: ${oc.env:DATA_DIR}
+    num_val_episodes: 0
