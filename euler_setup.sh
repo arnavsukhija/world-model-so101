@@ -92,8 +92,7 @@ if [[ $SKIP_T5 -eq 0 ]]; then
         echo "       Dataset: $DATA_DIR"
         echo "       Prompt:  'push the cube from left to right'"
         uv run python ../data_preprocessing/action/precompute_t5.py \
-            --dataset-path "$DATA_DIR" \
-            --prompt "push the cube from left to right"
+            --dataset-path "$DATA_DIR"
         echo "       Done. Each zarr now contains language_embedding."
     fi
 else
