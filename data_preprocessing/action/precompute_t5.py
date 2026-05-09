@@ -14,7 +14,8 @@ def add_t5(path: pathlib.Path, encoder: CosmosT5TextEncoder, embedding: np.ndarr
     root: zarr.Group
     with zarr.open(str(path), "r+") as root:
         if embedding is None:
-            prompt = root["language_instruction"][0].decode("utf-8")
+            raw = root["language_instruction"][0]
+            prompt = raw.decode("utf-8") if hasattr(raw, "decode") else str(raw)
             embedding = (
                 encoder.encode_prompts(prompt, max_length=512, return_mask=False).cpu().numpy().astype(np.float16)
             )
