@@ -53,8 +53,6 @@ echo "=== Smoke test: config dryrun ==="
 torchrun --nproc_per_node=1 --master_port=12341 \
     -m scripts.train --config=cosmos_predict2/configs/config.py --dryrun \
     -- experiment="$EXPERIMENT" \
-    +data_config.dataset.dataset.data_dir="$DATA_DIR" \
-    +data_config.dataset.dataset.num_val_episodes=0 \
     trainer.run_validation=false
 
 echo ""
@@ -62,8 +60,6 @@ echo "=== Smoke test: 100 training iterations ==="
 torchrun --nproc_per_node=1 --master_port=12342 \
     -m scripts.train --config=cosmos_predict2/configs/config.py \
     -- experiment="$EXPERIMENT" \
-    +data_config.dataset.dataset.data_dir="$DATA_DIR" \
-    +data_config.dataset.dataset.num_val_episodes=0 \
     trainer.max_iter=100 trainer.logging_iter=10 \
     trainer.run_validation=false checkpoint.save_iter=100
 
