@@ -195,6 +195,7 @@ def process_dataset(
     prompt: str,
     joints: list[str],
     skip_existing: bool = True,
+    episode_offset: int = 0,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     episodes_meta = load_episodes_meta(dataset_root, camera_key)
@@ -206,7 +207,7 @@ def process_dataset(
     video_path_cache: dict[tuple[int, int], pathlib.Path] = {}
 
     for ep_idx, df in tqdm.tqdm(episodes, desc="Processing episodes"):
-        out_path = output_dir / f"episode_{ep_idx:06d}.zarr"
+        out_path = output_dir / f"episode_{ep_idx + episode_offset:06d}.zarr"
         if skip_existing and out_path.exists():
             continue
 
@@ -268,6 +269,9 @@ def main() -> None:
     p.add_argument("--prompt", default="push the cube from left to right")
     p.add_argument("--joints", nargs="+", default=DEFAULT_JOINTS)
     p.add_argument("--no-skip-existing", action="store_true")
+    p.add_argument("--episode-offset", type=int, default=0,
+                   help="Add this value to all episode indices in the output filenames. "
+                        "Use when merging multiple datasets that each start from episode 0.")
     args = p.parse_args()
 
     process_dataset(
@@ -277,6 +281,7 @@ def main() -> None:
         prompt=args.prompt,
         joints=args.joints,
         skip_existing=not args.no_skip_existing,
+        episode_offset=args.episode_offset,
     )
 
 
