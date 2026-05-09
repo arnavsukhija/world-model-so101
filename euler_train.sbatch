@@ -8,7 +8,7 @@
 #SBATCH --cpus-per-task=12
 #SBATCH --mem-per-cpu=6G
 # A100 required: 2B Cosmos backbone at bf16 needs ~15 GB VRAM; V100 16 GB is too small.
-#SBATCH --gres=gpu:a100:1
+#SBATCH --gres=gpu:a100-pcie-40gb:1
 #SBATCH --partition=gpu
 
 # ── Config ────────────────────────────────────────────────────────────────────

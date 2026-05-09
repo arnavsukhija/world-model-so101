@@ -9,7 +9,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem-per-cpu=8G
-#SBATCH --gres=gpu:a100:1
+#SBATCH --gres=gpu:a100-pcie-40gb:1
 #SBATCH --partition=gpu
 
 DATA_DIR="${DATA_DIR:-/cluster/scratch/$USER/so101_push_zarr}"
