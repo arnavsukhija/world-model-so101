@@ -15,7 +15,7 @@
 DATA_DIR="${DATA_DIR:-/cluster/scratch/$USER/so101_push_zarr}"
 EXPERIMENT="w2a_so101_push_v2w_pretrained_cosmos_lr1.000e-04_layer20_bsz1"
 
-REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="${REPO_DIR:-$SLURM_SUBMIT_DIR}"
 MODEL_DIR="$REPO_DIR/model"
 mkdir -p "$REPO_DIR/logs"
 

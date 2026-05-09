@@ -27,7 +27,7 @@ LOG_ITER=50
 SAVE_ITER=500
 GRAD_ACCUM=4      # effective batch size = 4
 
-REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="${REPO_DIR:-$SLURM_SUBMIT_DIR}"
 MODEL_DIR="$REPO_DIR/model"
 LOG_DIR="$REPO_DIR/logs"
 mkdir -p "$LOG_DIR"
