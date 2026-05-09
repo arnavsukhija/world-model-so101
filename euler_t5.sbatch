@@ -12,7 +12,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=48G
+#SBATCH --mem-per-cpu=12G
 #SBATCH --partition=cpu
 
 DATA_DIR="${DATA_DIR:-/cluster/scratch/$USER/so101_push_zarr}"
