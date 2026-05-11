@@ -49,7 +49,7 @@ from imaginaire.utils.config_helper import override
 # SO-101 joint order (must match process_so101.py DEFAULT_JOINTS)
 JOINT_NAMES = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"]
 
-PROMPT = "push the cube from left to right"
+PROMPT = "push the polyhedron from left to right"  # default; override with --prompt
 
 IMG_H, IMG_W = 480, 640
 
@@ -185,6 +185,7 @@ def query_model(
     pipeline: Video2World2ActionPipeline,
     input_vid: torch.Tensor,
     state: torch.Tensor,
+    prompt: str = PROMPT,
     num_sampling_steps: int = 35,
     stop_video_denoising_step: int = 17,
 ) -> np.ndarray:
@@ -192,7 +193,7 @@ def query_model(
     pred_actions = pipeline(
         input_vid=input_vid,
         state_B_HO_O=state,
-        prompt=PROMPT,
+        prompt=prompt,
         num_sampling_step=num_sampling_steps,
         stop_after_step=stop_video_denoising_step,
         use_cuda_graphs=False,  # safer for one-off inference
@@ -209,6 +210,7 @@ def run_open_loop(
     cap: cv2.VideoCapture,
     robot,
     *,
+    prompt: str = PROMPT,
     img_horizon: int = 5,
     num_execute_actions: int = 15,
     execution_hz: float = 5.0,
@@ -228,7 +230,7 @@ def run_open_loop(
 
     print("Querying world model …")
     t0 = time.time()
-    actions = query_model(pipeline, input_vid, state)  # [T, 5]
+    actions = query_model(pipeline, input_vid, state, prompt=prompt)  # [T, 5]
     print(f"Planning took {time.time()-t0:.1f}s. Executing {num_execute_actions} steps at {execution_hz}Hz …")
 
     dt = 1.0 / execution_hz
@@ -265,6 +267,7 @@ def run_receding_horizon(
     cap: cv2.VideoCapture,
     robot,
     *,
+    prompt: str = PROMPT,
     img_horizon: int = 5,
     num_execute_actions: int = 4,
     replan_every: int = 4,
@@ -298,7 +301,7 @@ def run_receding_horizon(
         if action_buffer is None or buf_idx >= replan_every:
             print(f"Step {step_i}: replanning …")
             input_vid, state = build_input_tensors(image_history, joint_history)
-            action_buffer = query_model(pipeline, input_vid, state)
+            action_buffer = query_model(pipeline, input_vid, state, prompt=prompt)
             buf_idx = 0
 
         action = action_buffer[buf_idx]
@@ -341,6 +344,8 @@ def main() -> None:
     p.add_argument("--total-steps", type=int, default=60,
                    help="[receding mode] total number of control steps")
     p.add_argument("--execution-hz", type=float, default=5.0)
+    p.add_argument("--prompt", default=PROMPT,
+                   help="Language prompt describing the task (must match training prompt)")
     p.add_argument("--save-rollout", type=pathlib.Path, default=None,
                    help="If set, save rollout video to this path")
     args = p.parse_args()
@@ -372,6 +377,7 @@ def main() -> None:
         if args.mode == "open_loop":
             run_open_loop(
                 pipeline, cap, robot,
+                prompt=args.prompt,
                 num_execute_actions=args.num_execute_actions,
                 execution_hz=args.execution_hz,
                 save_rollout=args.save_rollout,
@@ -379,6 +385,7 @@ def main() -> None:
         else:
             run_receding_horizon(
                 pipeline, cap, robot,
+                prompt=args.prompt,
                 num_execute_actions=args.num_execute_actions,
                 replan_every=args.replan_every,
                 total_steps=args.total_steps,
