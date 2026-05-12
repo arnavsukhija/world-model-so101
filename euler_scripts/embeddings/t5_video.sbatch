@@ -42,7 +42,7 @@ source "$MODEL_DIR/.venv/bin/activate"
 cd "$MODEL_DIR"
 
 # T5_MODEL_DIR resolves to checkpoints/text_encoder/t5-11b (set in imaginaire/constants.py)
-python data_preprocessing/video/get_t5_embeddings.py \
+python ../data_preprocessing/video/get_t5_embeddings.py \
     --dataset_path "$VIDEO_DATA_DIR"
 
 echo ""
