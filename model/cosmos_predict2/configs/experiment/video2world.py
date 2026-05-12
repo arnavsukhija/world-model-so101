@@ -71,6 +71,12 @@ lrs = np.logspace(-5, -3, 9)[[5]]
 bszs = [32]
 ranks = [256]
 
+# SO-101 single-GPU configs: bsz=1, grad_accum=32 to match effective bsz of 32
+SO101_LRS = np.logspace(-5, -3, 9)[[5]]  # same LR as default: 3.162e-04
+SO101_RANKS = [256]
+SO101_BSZ = 1
+SO101_GRAD_ACCUM = 32
+
 
 def get_local_batch_size(global_bsz: int) -> int:
     res = global_bsz / parallel_state.get_data_parallel_world_size()
@@ -86,6 +92,8 @@ cs = ConfigStore.instance()
 
 for rank in ranks:
     for dataset in train_datasets:
+        if dataset == "so101_push":
+            continue  # SO-101 has its own block below with single-GPU settings
         for lr in lrs:
             for bsz in bszs:
                 train_type = f"lora_rank{rank}" if rank is not None else "fullft"
@@ -118,3 +126,42 @@ for rank in ranks:
                     name=name,
                     node=cfg,
                 )
+
+# SO-101 single-GPU experiments (bsz=1, grad_accum=32 → effective bsz 32)
+for rank in SO101_RANKS:
+    for lr in SO101_LRS:
+        train_type = f"lora_rank{rank}" if rank is not None else "fullft"
+        eff_bsz = SO101_BSZ * SO101_GRAD_ACCUM
+        name = f"v2w_so101_push_{train_type}_lr{lr:.3e}_bsz{eff_bsz}_gradacc{SO101_GRAD_ACCUM}"
+
+        cfg = copy.deepcopy(BASE)
+        cfg["defaults"][1]["override /video_dataset_train"] = "so101_push"
+        cfg["defaults"][2]["override /video_dataset_val"] = "so101_push"
+
+        cfg["optimizer"]["lr"] = lr.item()
+        cfg["job"]["name"] = name
+        cfg["job"]["group"] = "so101"
+        cfg["dataloader_train"] = {"batch_size": SO101_BSZ}
+
+        cfg["trainer"]["grad_accum_iter"] = SO101_GRAD_ACCUM
+        cfg["trainer"]["max_iter"] = 10_000
+        cfg["trainer"]["logging_iter"] = 50
+
+        if rank is not None:
+            cfg["model"]["config"].update(
+                dict(
+                    train_architecture="lora",
+                    lora_rank=rank,
+                    lora_alpha=32,
+                    init_lora_weights=True,
+                    lora_target_modules="q_proj,k_proj,v_proj,output_proj,x_embedder.proj.1,linear_1,linear_2,mlp.layer1,mlp.layer2",
+                )
+            )
+        cfg["trainer"]["callbacks"]["video_eval"]["fuse_lora"] = rank is not None
+
+        cs.store(
+            group="experiment",
+            package="_global_",
+            name=name,
+            node=cfg,
+        )

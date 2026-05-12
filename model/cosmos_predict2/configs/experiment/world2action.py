@@ -112,4 +112,32 @@ for video_ckpt, data_config, xattn_layer_idx, lr, bsz in it.product(
         node=cfg,
     )
 
+# SO-101 micro-decoder experiments: so101_micro pipe (d=256, 8 blocks, ~16M params) paired with
+# every available video backbone including the SO-101 finetuned one once it's in
+# VIDEO_MODEL_CKPT_NAMES. bsz=1 matches the single A100 W2A training setup.
+SO101_MICRO_LRS = np.logspace(-5, -3, 9)[[4]]  # 1.000e-04, same as default W2A
+SO101_MICRO_XATTN = 20
+
+for video_ckpt, lr in it.product(VIDEO_MODEL_CKPT_NAMES, SO101_MICRO_LRS):
+    xattn_layer_idx = SO101_MICRO_XATTN
+    bsz = 1
+    exp_name = f"w2a_so101_push_micro_{video_ckpt}_lr{lr:.3e}_layer{xattn_layer_idx}_bsz{bsz}"
+
+    cfg = copy.deepcopy(BASE)
+    cfg["defaults"][0]["override /model"] = video_ckpt
+    cfg["defaults"][1]["override /world2action_pipe"] = "so101_micro"
+    cfg["defaults"][2]["override /data_config"] = "so101_push"
+    cfg["model"]["config"]["pipe_config"]["xattn_layer_idx"] = xattn_layer_idx
+    cfg["optimizer"]["lr"] = lr.item()
+    cfg["job"]["group"] = "so101_micro"
+    cfg["job"]["name"] = exp_name
+    cfg["dataloader_train"] = {"batch_size": bsz}
+
+    cs.store(
+        group="experiment",
+        package="_global_",
+        name=exp_name,
+        node=cfg,
+    )
+
 # TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=7200 CUDA_DEVICE_MAX_CONNECTIONS=1 NVTE_FUSED_ATTN=0 torchrun --nproc_per_node=4 --master_port=12341 -m scripts.train --config=cosmos_predict2/configs/config.py -- experiment=...

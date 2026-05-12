@@ -64,6 +64,9 @@ VIDEO_MODEL_CKPT_NAMES = [
     "v2w_libero_goal_agentview_lora_rank256_lr1.778e-04_bsz32_iter_000007020_fused",
     "v2w_libero_object_agentview_lora_rank256_lr1.778e-04_bsz32_iter_000008260_fused",
     "v2w_libero_spatial_agentview_lora_rank256_lr1.778e-04_bsz32_iter_000007540_fused",
+    # SO-101 finetuned backbone — add the actual name after euler_v2w_train.sbatch completes
+    # and extract_v2w_backbone.py has run. Name format:
+    # "v2w_so101_push_lora_rank256_lr3.162e-04_bsz32_iter_XXXXXX_fused"
 ]
 VIDEO_MODEL_CKPT_DIR = pathlib.Path(__file__).parents[3] / "checkpoints" / "video_backbone"
 

@@ -54,6 +54,24 @@ ACTION_DECODER_NETS = {
         pair_timestep_feature_rank=512,
         sac_config=SACConfig(mode="none", every_n_blocks=1),
     ),
+    # SO-101 micro: ~16 M params, ~28x smaller than libero.
+    # Justified by single-task (push), 5-DOF arm, fixed camera — the frozen video DiT
+    # backbone handles scene understanding; the decoder only needs to map latents → joint deltas.
+    "so101_micro": L(VarNoiseWorld2ActionDIT)(
+        max_horizon=16,
+        in_channels=5,
+        out_channels=5,
+        model_channels=256,
+        num_blocks=8,
+        num_heads=8,
+        mlp_ratio=4.0,
+        atten_backend="flash_attn_no_cp",
+        crossattn_emb_channels=2048,
+        use_adaln_lora=True,
+        adaln_lora_dim=32,
+        pair_timestep_feature_rank=256,
+        sac_config=SACConfig(mode="none", every_n_blocks=1),
+    ),
 }
 
 

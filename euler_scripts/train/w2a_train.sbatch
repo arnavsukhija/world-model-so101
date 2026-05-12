@@ -12,7 +12,8 @@
 
 # ── Config ────────────────────────────────────────────────────────────────────
 DATA_DIR="${DATA_DIR:-/cluster/scratch/$USER/so101_push_zarr}"
-EXPERIMENT="w2a_so101_push_v2w_pretrained_cosmos_lr1.000e-04_layer20_bsz1"
+# Default: micro decoder + pretrained backbone (replace video ckpt name once V2W finetuning done)
+EXPERIMENT="${EXPERIMENT:-w2a_so101_push_micro_v2w_pretrained_cosmos_lr1.000e-04_layer20_bsz1}"
 
 MAX_ITER=5000
 LOG_ITER=50
@@ -67,6 +68,7 @@ echo "--- Config dryrun ---"
 torchrun --nproc_per_node=1 --master_port=12341 \
     -m scripts.train --config=cosmos_predict2/configs/config.py --dryrun \
     -- experiment="$EXPERIMENT" \
+    +data_config.dataset.dataset.data_dir="$DATA_DIR" \
     trainer.run_validation=false
 
 echo "Config OK. Starting training..."
@@ -76,6 +78,7 @@ echo ""
 torchrun --nproc_per_node=1 --master_port=12342 \
     -m scripts.train --config=cosmos_predict2/configs/config.py \
     -- experiment="$EXPERIMENT" \
+    +data_config.dataset.dataset.data_dir="$DATA_DIR" \
     trainer.max_iter=$MAX_ITER \
     trainer.logging_iter=$LOG_ITER \
     trainer.run_validation=false \
@@ -87,7 +90,13 @@ echo "=== Training complete ==="
 echo ""
 
 # ── Extract slim inference artifacts ──────────────────────────────────────────
-CKPT_DIR="checkpoints/vam/so101/$EXPERIMENT/checkpoints"
+# job.group is "so101_micro" for micro experiments, "so101" for legacy ones
+if [[ "$EXPERIMENT" == *"_micro_"* ]]; then
+    JOB_GROUP="so101_micro"
+else
+    JOB_GROUP="so101"
+fi
+CKPT_DIR="checkpoints/vam/$JOB_GROUP/$EXPERIMENT/checkpoints"
 LATEST_CKPT=$(ls -t "$CKPT_DIR"/iter_*.pt 2>/dev/null | head -1)
 
 if [[ -n "$LATEST_CKPT" ]]; then

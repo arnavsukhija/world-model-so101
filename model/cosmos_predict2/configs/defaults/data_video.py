@@ -24,6 +24,14 @@ def get_sampler(dataset) -> ResumableDistributedSampler:
 cs = ConfigStore.instance()
 
 train_datasets: dict[str, Dataset_] = {
+    "so101_push": L(Dataset)(
+        dataset_dir=...,
+        num_frames=61,
+        video_size=[480, 640],
+        data_fps=15.0,
+        is_val=False,
+        obs_history=5,
+    ),
     "bridge": L(Dataset)(
         dataset_dir=...,
         num_frames=61,
